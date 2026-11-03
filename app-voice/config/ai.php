@@ -125,6 +125,7 @@ return [
             'driver' => 'ollama',
             'key' => env('OLLAMA_API_KEY', ''),
             'url' => env('OLLAMA_URL', 'http://localhost:11434'),
+            'models' => ['text' => ['default' => env('AI_REPORT_MODEL')]],
         ],
 
         'openai' => [
@@ -141,8 +142,10 @@ return [
 
         'openai-compatible' => [
             'driver' => 'openai-compatible',
-            'url' => env('OPENAI_COMPATIBLE_URL'),
-            'key' => env('OPENAI_COMPATIBLE_API_KEY'),
+            'url' => env('AI_REPORT_URL', 'http://localhost:20128/v1'),
+            'key' => env('AI_REPORT_API_KEY'),
+            'headers' => ['Accept' => 'application/json'],
+            'models' => ['text' => ['default' => env('AI_REPORT_MODEL')]],
         ],
 
         'openrouter' => [

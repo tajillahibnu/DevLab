@@ -1,0 +1,205 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Ai\Agents\VisitReportAgent;
+use App\Models\Transcript;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
+use Tests\TestCase;
+
+class TranscriptTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_it_displays_home_page_with_empty_history(): void
+    {
+        $response = $this->get('/');
+
+        $response->assertStatus(200);
+        $response->assertSee('suara');
+        $response->assertSee('Belum ada riwayat transkripsi');
+    }
+
+    public function test_it_transcribes_uploaded_audio_and_persists_to_database(): void
+    {
+        VisitReportAgent::fake(["*RS Lawang Medika (RS Baru)*\n> Kunjungan Farmasi\n- Menindaklanjuti stok obat"]);
+        Storage::fake('public');
+        Http::fake([
+            '*/asr*' => Http::response([
+                'text' => 'Halo ini adalah contoh suara untuk pengujian transkripsi.',
+                'segments' => [
+                    ['start' => 0.0, 'end' => 2.5, 'text' => 'Halo ini adalah contoh suara.'],
+                ],
+            ], 200),
+        ]);
+
+        $audio = UploadedFile::fake()->create('sample-interview.mp3', 250, 'audio/mpeg');
+
+        $response = $this->post(route('transcribe'), [
+            'audio' => $audio,
+            'source_type' => 'upload',
+        ]);
+
+        $this->assertDatabaseCount('transcripts', 1);
+        $transcript = Transcript::first();
+
+        $this->assertEquals('sample-interview', $transcript->title);
+        $this->assertEquals('sample-interview.mp3', $transcript->audio_name);
+        $this->assertEquals('upload', $transcript->source_type);
+        $this->assertEquals('Halo ini adalah contoh suara untuk pengujian transkripsi.', $transcript->text);
+        $this->assertSame("*RS Lawang Medika (RS Baru)*\n> Kunjungan Farmasi\n- Menindaklanjuti stok obat", $transcript->formatted_report);
+
+        VisitReportAgent::assertPrompted('Halo ini adalah contoh suara untuk pengujian transkripsi.');
+
+        // Verify audio file stored in public disk
+        Storage::disk('public')->assertExists($transcript->audio_path);
+
+        $response->assertRedirect(route('home', ['active' => $transcript->id]));
+    }
+
+    public function test_report_failure_does_not_discard_transcript_or_audio(): void
+    {
+        VisitReportAgent::fake(function () {
+            throw new \RuntimeException('AI endpoint unavailable');
+        });
+        Storage::fake('public');
+        Http::fake([
+            '*/asr*' => Http::response(['text' => 'Transkrip tetap tersimpan.', 'segments' => []], 200),
+        ]);
+
+        $response = $this->post(route('transcribe'), [
+            'audio' => UploadedFile::fake()->create('visit.wav', 100, 'audio/wav'),
+            'source_type' => 'upload',
+        ]);
+
+        $transcript = Transcript::firstOrFail();
+        $this->assertSame('Transkrip tetap tersimpan.', $transcript->text);
+        $this->assertNull($transcript->formatted_report);
+        Storage::disk('public')->assertExists($transcript->audio_path);
+        $response->assertRedirect(route('home', ['active' => $transcript->id]));
+        $response->assertSessionHas('report_error');
+    }
+
+    public function test_it_regenerates_report_without_changing_transcript_text(): void
+    {
+        VisitReportAgent::fake(['*Laporan baru*']);
+        config(['ai-report.provider' => 'openai-compatible', 'ai-report.model' => 'nara-ibnu']);
+
+        $transcript = Transcript::create([
+            'title' => 'Kunjungan',
+            'audio_name' => 'kunjungan.wav',
+            'audio_path' => 'transcriptions/kunjungan.wav',
+            'mime_type' => 'audio/wav',
+            'file_size' => 100,
+            'source_type' => 'upload',
+            'text' => 'Teks transkrip asli.',
+        ]);
+
+        $response = $this->post(route('transcripts.report.regenerate', $transcript));
+
+        $transcript->refresh();
+        $this->assertSame('Teks transkrip asli.', $transcript->text);
+        $this->assertSame('*Laporan baru*', $transcript->formatted_report);
+        VisitReportAgent::assertPrompted('Teks transkrip asli.');
+        $response->assertRedirect(route('home', ['active' => $transcript->id]));
+    }
+
+    public function test_report_regeneration_failure_preserves_transcript_and_existing_report(): void
+    {
+        VisitReportAgent::fake(function () {
+            throw new \RuntimeException('AI endpoint unavailable');
+        });
+        config(['ai-report.provider' => 'openai-compatible', 'ai-report.model' => 'nara-ibnu']);
+
+        $transcript = Transcript::create([
+            'title' => 'Kunjungan',
+            'audio_name' => 'kunjungan.wav',
+            'audio_path' => 'transcriptions/kunjungan.wav',
+            'mime_type' => 'audio/wav',
+            'file_size' => 100,
+            'source_type' => 'upload',
+            'text' => 'Teks transkrip asli.',
+            'formatted_report' => 'Laporan lama.',
+        ]);
+
+        $response = $this->post(route('transcripts.report.regenerate', $transcript));
+
+        $transcript->refresh();
+        $this->assertSame('Teks transkrip asli.', $transcript->text);
+        $this->assertSame('Laporan lama.', $transcript->formatted_report);
+        $response->assertRedirect(route('home', ['active' => $transcript->id]));
+        $response->assertSessionHas('report_error');
+    }
+
+    public function test_it_displays_active_transcript_and_table_row(): void
+    {
+        Storage::fake('public');
+        $stored = Storage::disk('public')->put('transcriptions/sample.mp3', 'dummy audio bytes');
+
+        $transcript = Transcript::create([
+            'title' => 'Rapat Mingguan',
+            'audio_name' => 'rapat-mingguan.mp3',
+            'audio_path' => 'transcriptions/sample.mp3',
+            'mime_type' => 'audio/mpeg',
+            'file_size' => 102400,
+            'source_type' => 'record',
+            'text' => 'Hasil pembahasan rapat mingguan ID-Grow.',
+        ]);
+
+        $response = $this->get(route('home', ['active' => $transcript->id]));
+
+        $response->assertStatus(200);
+        $response->assertSee('Rapat Mingguan');
+        $response->assertSee('Hasil pembahasan rapat mingguan ID-Grow.');
+        $response->assertSee($transcript->audio_url);
+        $response->assertSee('Riwayat Transkripsi', false);
+        $response->assertSee('1 Tersimpan');
+    }
+
+    public function test_it_can_download_transcript_as_text_file(): void
+    {
+        $transcript = Transcript::create([
+            'title' => 'Catatan Proyek',
+            'audio_name' => 'catatan.wav',
+            'audio_path' => 'transcriptions/catatan.wav',
+            'mime_type' => 'audio/wav',
+            'file_size' => 50000,
+            'source_type' => 'upload',
+            'text' => 'Catatan audio proyek yang akan diunduh.',
+        ]);
+
+        $response = $this->get(route('transcripts.download', $transcript));
+
+        $response->assertStatus(200);
+        $response->assertHeader('Content-Disposition', 'attachment; filename="catatan-proyek-'.$transcript->id.'.txt"');
+        $response->assertSee('Catatan audio proyek yang akan diunduh.');
+    }
+
+    public function test_it_deletes_transcript_and_audio_file(): void
+    {
+        Storage::fake('public');
+        $filePath = 'transcriptions/todelete.mp3';
+        Storage::disk('public')->put($filePath, 'dummy audio data');
+
+        $transcript = Transcript::create([
+            'title' => 'File Hapus',
+            'audio_name' => 'todelete.mp3',
+            'audio_path' => $filePath,
+            'mime_type' => 'audio/mpeg',
+            'file_size' => 1234,
+            'source_type' => 'upload',
+            'text' => 'Teks yang akan dihapus.',
+        ]);
+
+        Storage::disk('public')->assertExists($filePath);
+
+        $response = $this->delete(route('transcripts.destroy', $transcript));
+
+        $response->assertRedirect(route('home'));
+        $this->assertDatabaseMissing('transcripts', ['id' => $transcript->id]);
+        Storage::disk('public')->assertMissing($filePath);
+    }
+}
