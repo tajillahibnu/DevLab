@@ -39,7 +39,7 @@ class TranscribeAudioController extends Controller
 
             return redirect()->route('home', ['active' => $transcript->id])
                 ->with('report_modal', true)
-                ->with('success', 'Laporan WhatsApp berhasil dibuat ulang.');
+                ->with('success', 'Laporan berhasil dibuat ulang.');
         } catch (Throwable) {
             return redirect()->route('home', ['active' => $transcript->id])
                 ->with('report_modal', true)
@@ -53,17 +53,18 @@ class TranscribeAudioController extends Controller
         set_time_limit(300);
 
         $validated = $request->validate([
-            'audio' => ['required', File::types(['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm', 'ogg'])->max('100mb')],
+            'audio' => ['required', 'file', 'max:102400', 'extensions:mp3,mp4,mpeg,mpga,m4a,wav,webm,ogg,3gp,3gpp'],
             'source_type' => ['nullable', 'string', 'in:record,upload'],
         ], [
             'audio.required' => 'Pilih atau rekam audio terlebih dahulu.',
             'audio.max' => 'Ukuran audio maksimal 100 MB.',
-            'audio.mimes' => 'Format audio tidak didukung.',
+            'audio.extensions' => 'Format audio tidak didukung. Gunakan MP3, MP4, M4A, WAV, WebM, OGG, atau 3GP.',
         ]);
 
         $audioFile = $validated['audio'];
         $originalName = $audioFile->getClientOriginalName();
         $sourceType = $request->input('source_type', str_starts_with($originalName, 'rekaman-') ? 'record' : 'upload');
+        $transcriptionStartedAt = microtime(true);
 
         // Store audio permanently on public disk so it can be streamed/played back
         $storedPath = $audioFile->store('transcriptions', 'public');
@@ -103,31 +104,8 @@ class TranscribeAudioController extends Controller
                 'text' => $transcriptText,
                 'language' => 'id',
                 'segments' => $data['segments'] ?? [],
+                'transcription_duration_seconds' => (int) round(microtime(true) - $transcriptionStartedAt),
             ]);
-
-            try {
-                $provider = config('ai-report.provider');
-                $model = config('ai-report.model');
-
-                if (! in_array($provider, ['openai-compatible', 'ollama'], true)) {
-                    throw new \RuntimeException('AI_REPORT_PROVIDER must be openai-compatible or ollama.');
-                }
-
-                if (! is_string($model) || trim($model) === '') {
-                    throw new \RuntimeException('AI_REPORT_MODEL is required.');
-                }
-
-                $aiProvider = $provider === 'openai-compatible' ? Lab::OpenAICompatible : Lab::Ollama;
-                $report = (new VisitReportAgent)->prompt(
-                    $transcriptText,
-                    provider: $aiProvider,
-                    model: $model,
-                    timeout: (int) config('ai-report.timeout', 120),
-                );
-                $transcript->update(['formatted_report' => trim($report->text)]);
-            } catch (Throwable) {
-                session()->flash('report_error', 'Transkrip berhasil disimpan, tetapi laporan AI gagal dibuat. Periksa AI_REPORT_PROVIDER, AI_REPORT_URL, AI_REPORT_MODEL, dan koneksi penyedia AI. Teks transkrip tetap tersimpan.');
-            }
 
             return redirect()->route('home', ['active' => $transcript->id])
                 ->with('success', 'Audio berhasil ditranskripsikan dan disimpan ke riwayat!');

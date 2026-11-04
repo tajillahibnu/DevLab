@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Ai\Agents\VisitReportAgent;
 use App\Models\Transcript;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -25,7 +24,6 @@ class TranscriptTest extends TestCase
 
     public function test_it_transcribes_uploaded_audio_and_persists_to_database(): void
     {
-        VisitReportAgent::fake(["*RS Lawang Medika (RS Baru)*\n> Kunjungan Farmasi\n- Menindaklanjuti stok obat"]);
         Storage::fake('public');
         Http::fake([
             '*/asr*' => Http::response([
@@ -50,9 +48,8 @@ class TranscriptTest extends TestCase
         $this->assertEquals('sample-interview.mp3', $transcript->audio_name);
         $this->assertEquals('upload', $transcript->source_type);
         $this->assertEquals('Halo ini adalah contoh suara untuk pengujian transkripsi.', $transcript->text);
-        $this->assertSame("*RS Lawang Medika (RS Baru)*\n> Kunjungan Farmasi\n- Menindaklanjuti stok obat", $transcript->formatted_report);
-
-        VisitReportAgent::assertPrompted('Halo ini adalah contoh suara untuk pengujian transkripsi.');
+        $this->assertNull($transcript->formatted_report);
+        $this->assertIsNumeric($transcript->transcription_duration_seconds);
 
         // Verify audio file stored in public disk
         Storage::disk('public')->assertExists($transcript->audio_path);
@@ -60,11 +57,27 @@ class TranscriptTest extends TestCase
         $response->assertRedirect(route('home', ['active' => $transcript->id]));
     }
 
-    public function test_report_failure_does_not_discard_transcript_or_audio(): void
+    public function test_it_accepts_whatsapp_mp4_video_upload_for_transcription(): void
     {
-        VisitReportAgent::fake(function () {
-            throw new \RuntimeException('AI endpoint unavailable');
-        });
+        Storage::fake('public');
+        Http::fake([
+            '*/asr*' => Http::response(['text' => 'Audio dalam video berhasil ditranskripsikan.', 'segments' => []], 200),
+        ]);
+
+        $response = $this->post(route('transcribe'), [
+            'audio' => UploadedFile::fake()->createWithContent('WhatsApp Audio 2026-11-02 at 19.43.16.mp4', "\x00\x00\x00\x18ftyp3gp4\x00\x00\x00\x00isom3gp4\x00\x00\x00\x01mdat"),
+            'source_type' => 'upload',
+        ]);
+
+        $transcript = Transcript::firstOrFail();
+        $this->assertSame('Audio dalam video berhasil ditranskripsikan.', $transcript->text);
+        $this->assertSame('application/mp4', $transcript->mime_type);
+        Storage::disk('public')->assertExists($transcript->audio_path);
+        $response->assertRedirect(route('home', ['active' => $transcript->id]));
+    }
+
+    public function test_transcription_saves_without_generating_ai_report(): void
+    {
         Storage::fake('public');
         Http::fake([
             '*/asr*' => Http::response(['text' => 'Transkrip tetap tersimpan.', 'segments' => []], 200),
@@ -80,12 +93,12 @@ class TranscriptTest extends TestCase
         $this->assertNull($transcript->formatted_report);
         Storage::disk('public')->assertExists($transcript->audio_path);
         $response->assertRedirect(route('home', ['active' => $transcript->id]));
-        $response->assertSessionHas('report_error');
+        $response->assertSessionMissing('report_error');
     }
 
     public function test_it_regenerates_report_without_changing_transcript_text(): void
     {
-        VisitReportAgent::fake(['*Laporan baru*']);
+        Http::fake(['*/chat/completions' => Http::response(['choices' => [['message' => ['content' => '*Laporan baru*']]]], 200)]);
         config(['ai-report.provider' => 'openai-compatible', 'ai-report.model' => 'nara-ibnu']);
 
         $transcript = Transcript::create([
@@ -103,15 +116,12 @@ class TranscriptTest extends TestCase
         $transcript->refresh();
         $this->assertSame('Teks transkrip asli.', $transcript->text);
         $this->assertSame('*Laporan baru*', $transcript->formatted_report);
-        VisitReportAgent::assertPrompted('Teks transkrip asli.');
         $response->assertRedirect(route('home', ['active' => $transcript->id]));
     }
 
     public function test_report_regeneration_failure_preserves_transcript_and_existing_report(): void
     {
-        VisitReportAgent::fake(function () {
-            throw new \RuntimeException('AI endpoint unavailable');
-        });
+        Http::fake(['*/chat/completions' => Http::response(['error' => ['message' => 'AI endpoint unavailable']], 503)]);
         config(['ai-report.provider' => 'openai-compatible', 'ai-report.model' => 'nara-ibnu']);
 
         $transcript = Transcript::create([

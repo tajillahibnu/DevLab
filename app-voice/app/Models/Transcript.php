@@ -14,6 +14,7 @@ class Transcript extends Model
         return [
             'segments' => 'array',
             'file_size' => 'integer',
+            'transcription_duration_seconds' => 'integer',
         ];
     }
 
@@ -24,6 +25,29 @@ class Transcript extends Model
     {
         return Attribute::make(
             get: fn () => asset('storage/'.$this->audio_path)
+        );
+    }
+
+    protected function formattedTranscriptionDuration(): Attribute
+    {
+        return Attribute::make(
+            get: function () {
+                $seconds = $this->transcription_duration_seconds;
+                if ($seconds === null) {
+                    return null;
+                }
+
+                if ($seconds < 60) {
+                    return $seconds.' detik';
+                }
+
+                $minutes = intdiv($seconds, 60);
+                $remainingSeconds = $seconds % 60;
+
+                return $remainingSeconds > 0
+                    ? $minutes.' menit '.$remainingSeconds.' detik'
+                    : $minutes.' menit';
+            }
         );
     }
 

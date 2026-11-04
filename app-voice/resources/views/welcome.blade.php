@@ -789,7 +789,7 @@
                             <span id="dropzone-desc">atau seret & jatuhkan file audio di sini</span>
                             <span class="file-name" id="file-name">WAV, MP3, M4A, WEBM, OGG · Maks. 100 MB</span>
                         </label>
-                        <input class="sr-only" id="audio-file" name="audio" type="file" accept="audio/*,.mp4,.mpeg,.mpga" required>
+                        <input class="sr-only" id="audio-file" name="audio" type="file" accept="audio/*,.mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm,.ogg,.3gp,.3gpp" required>
 
                         <!-- Audio Preview Player Sebelum Submit -->
                         <div class="preview-box" id="preview-box" style="display: none;">
@@ -837,7 +837,7 @@
                                     <span>{{ $activeTranscript->title ?: $activeTranscript->audio_name }}</span>
                                 </div>
                                 <span class="meta-details">
-                                    {{ $activeTranscript->audio_name }} &bull; {{ $activeTranscript->formatted_size }} &bull; {{ $activeTranscript->created_at->format('d M Y, H:i') }}
+                                    {{ $activeTranscript->audio_name }} &bull; {{ $activeTranscript->formatted_size }} &bull; Durasi transkripsi: {{ $activeTranscript->formatted_transcription_duration ?? 'tidak tersedia' }} &bull; {{ $activeTranscript->created_at->format('d M Y, H:i') }}
                                 </span>
                             </div>
 
@@ -945,7 +945,7 @@
                                         </div>
                                     </td>
                                     <td style="font: 11px 'DM Mono', monospace; color: var(--muted);">
-                                        {{ $item->created_at->format('d/m/Y H:i') }}
+                                        {{ $item->created_at->format('d/m/Y H:i') }}<br><span style="font:11px 'DM Sans',sans-serif;">Proses: {{ $item->formatted_transcription_duration ?? '—' }}</span>
                                     </td>
                                     <td style="text-align: right;">
                                         <div class="row-actions" style="justify-content: flex-end;">
