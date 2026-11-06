@@ -365,6 +365,18 @@
             align-items: center;
             gap: 12px;
         }
+        .engine-select {
+            width: 100%;
+            margin: 18px 0 0;
+            padding: 14px 16px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fbfbf7;
+            color: var(--ink);
+            font: inherit;
+        }
+        .engine-label { display:block; font-weight:600; font-size:13px; margin-bottom:6px; }
+        .engine-note { color:var(--muted); font-size:12px; margin:7px 0 0; }
         .format-note { color: var(--muted); font-size: 11px; }
 
         /* Result Panel */
@@ -710,6 +722,7 @@
     </header> -->
 
     <main style="margin-top: 12px;">
+        <p style="text-align:right"><a href="{{ route('settings.transcription') }}">Pengaturan Whisper</a></p>
         <!-- <section class="hero">
             <div class="eyebrow">Dari suara menjadi cerita</div>
             <h1>Setiap percakapan,<br><em>tertangkap dan tersimpan.</em></h1>
@@ -780,6 +793,7 @@
                     <form id="upload-form" action="{{ route('transcribe') }}" method="POST" enctype="multipart/form-data" hidden>
                         @csrf
                         <input type="hidden" name="source_type" id="source-type" value="upload">
+                        <input type="hidden" name="provider" id="selected-provider" value="{{ $selectedWhisper }}">
                         
                         <label class="dropzone" id="dropzone" for="audio-file">
                             <span class="upload-icon">
@@ -790,6 +804,17 @@
                             <span class="file-name" id="file-name">WAV, MP3, M4A, WEBM, OGG · Maks. 100 MB</span>
                         </label>
                         <input class="sr-only" id="audio-file" name="audio" type="file" accept="audio/*,.mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm,.ogg,.3gp,.3gpp" required>
+
+                        <label class="engine-select-wrap" for="whisper-provider">
+                            <span class="engine-label">Mesin transkripsi</span>
+                            <select class="engine-select" id="whisper-provider" aria-describedby="whisper-provider-note">
+                                <option value="whisperlive" @selected($selectedWhisper === 'whisperlive')>WhisperLive (REST)</option>
+                                @foreach ($whisperProviders as $key => $provider)
+                                    <option value="{{ $key }}" @selected($selectedWhisper === $key)>{{ $provider['name'] }}</option>
+                                @endforeach
+                            </select>
+                            <span class="engine-note" id="whisper-provider-note">Pilihan ini dipakai untuk audio berikutnya. Pastikan container penyedia sedang berjalan.</span>
+                        </label>
 
                         <!-- Audio Preview Player Sebelum Submit -->
                         <div class="preview-box" id="preview-box" style="display: none;">
@@ -837,7 +862,7 @@
                                     <span>{{ $activeTranscript->title ?: $activeTranscript->audio_name }}</span>
                                 </div>
                                 <span class="meta-details">
-                                    {{ $activeTranscript->audio_name }} &bull; {{ $activeTranscript->formatted_size }} &bull; Durasi transkripsi: {{ $activeTranscript->formatted_transcription_duration ?? 'tidak tersedia' }} &bull; {{ $activeTranscript->created_at->format('d M Y, H:i') }}
+                                    {{ $activeTranscript->audio_name }} &bull; {{ $activeTranscript->formatted_size }} &bull; Whisper: {{ $whisperProviders[$activeTranscript->transcription_provider]['name'] ?? 'tidak diketahui' }} &bull; Durasi transkripsi: {{ $activeTranscript->formatted_transcription_duration ?? 'tidak tersedia' }} &bull; {{ $activeTranscript->created_at->format('d M Y, H:i') }}
                                 </span>
                             </div>
 
@@ -934,7 +959,7 @@
                                     </td>
                                     <td>
                                         <span class="row-title">{{ $item->title ?: $item->audio_name }}</span>
-                                        <span class="row-file">{{ $item->audio_name }} &bull; {{ $item->formatted_size }}</span>
+                                        <span class="row-file">{{ $item->audio_name }} &bull; {{ $item->formatted_size }}<br>Whisper: {{ $whisperProviders[$item->transcription_provider]['name'] ?? 'tidak diketahui' }}</span>
                                     </td>
                                     <td class="row-audio-player">
                                         <audio controls preload="none" src="{{ $item->audio_url }}" title="Putar {{ $item->audio_name }}"></audio>
@@ -1070,6 +1095,11 @@
     const recordPane = document.getElementById('record-pane');
     const uploadForm = document.getElementById('upload-form');
     const sourceTypeInput = document.getElementById('source-type');
+    const whisperProvider = document.getElementById('whisper-provider');
+    const selectedProviderInput = document.getElementById('selected-provider');
+    whisperProvider.addEventListener('change', () => {
+        selectedProviderInput.value = whisperProvider.value;
+    });
 
     function switchTab(mode) {
         const isRecord = mode === 'record';

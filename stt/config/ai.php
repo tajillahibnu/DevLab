@@ -16,7 +16,7 @@ return [
     'default' => 'openai',
     'default_for_images' => 'gemini',
     'default_for_audio' => 'openai',
-    'default_for_transcription' => 'openai',
+    'default_for_transcription' => env('STT_PROVIDER', 'openai-compatible'),
     'default_for_embeddings' => 'openai',
     'default_for_reranking' => 'cohere',
     'default_for_classification' => 'typesafe',
@@ -138,6 +138,9 @@ return [
             'driver' => 'openai-compatible',
             'url' => env('OPENAI_COMPATIBLE_URL'),
             'key' => env('OPENAI_COMPATIBLE_API_KEY'),
+            'models' => [
+                'transcription' => ['default' => env('STT_MODEL')],
+            ],
         ],
 
         'openrouter' => [

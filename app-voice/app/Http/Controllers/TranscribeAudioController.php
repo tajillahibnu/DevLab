@@ -55,6 +55,7 @@ class TranscribeAudioController extends Controller
         $validated = $request->validate([
             'audio' => ['required', 'file', 'max:102400', 'extensions:mp3,mp4,mpeg,mpga,m4a,wav,webm,ogg,3gp,3gpp'],
             'source_type' => ['nullable', 'string', 'in:record,upload'],
+            'provider' => ['nullable', 'string', 'in:onerahmet,speaches,scribecrate,whisperlive'],
         ], [
             'audio.required' => 'Pilih atau rekam audio terlebih dahulu.',
             'audio.max' => 'Ukuran audio maksimal 100 MB.',
@@ -64,6 +65,10 @@ class TranscribeAudioController extends Controller
         $audioFile = $validated['audio'];
         $originalName = $audioFile->getClientOriginalName();
         $sourceType = $request->input('source_type', str_starts_with($originalName, 'rekaman-') ? 'record' : 'upload');
+        $provider = $validated['provider'] ?? null;
+        if ($provider !== null) {
+            TranscriptionSettingsController::saveSelection($provider, TranscriptionSettingsController::selection()['model']);
+        }
         $transcriptionStartedAt = microtime(true);
 
         // Store audio permanently on public disk so it can be streamed/played back
@@ -71,15 +76,35 @@ class TranscribeAudioController extends Controller
         $fullDiskPath = Storage::disk('public')->path($storedPath);
 
         try {
-            $whisperUrl = env('WHISPER_URL')
-                ?: preg_replace('#/v1/?$#', '', config('ai.providers.openai.url') ?: 'http://localhost:9000');
-            $whisperUrl = rtrim($whisperUrl, '/');
-
+            $selection = TranscriptionSettingsController::selection();
+            $provider = $selection['provider'];
+            $baseUrl = [
+                'onerahmet' => 'http://127.0.0.1:9000',
+                'speaches' => 'http://127.0.0.1:9001',
+                'scribecrate' => 'http://127.0.0.1:9002',
+                'whisperlive' => 'http://127.0.0.1:9004',
+            ][$provider];
+            $baseUrl = rtrim((string) config("services.whisper.{$provider}_url", $baseUrl), '/');
             $fileContents = file_get_contents($fullDiskPath);
+            $request = Http::timeout(300);
 
-            $response = Http::timeout(300)
-                ->attach('audio_file', $fileContents, $originalName)
-                ->post("{$whisperUrl}/asr?task=transcribe&language=id&output=json&encode=true");
+            if ($provider === 'onerahmet') {
+                $response = $request->attach('audio_file', $fileContents, $originalName)
+                    ->post("{$baseUrl}/asr?task=transcribe&language=id&output=json&encode=true");
+            } else {
+                $request = $request->attach('file', $fileContents, $originalName);
+                if ($provider === 'scribecrate') {
+                    $apiKey = config('services.whisper.scribecrate_api_key');
+                    if (is_string($apiKey) && $apiKey !== '') {
+                        $request = $request->withToken($apiKey);
+                    }
+                }
+                $model = in_array($provider, ['scribecrate', 'whisperlive'], true) ? 'whisper-1' : $selection['model'];
+                $response = $request->post("{$baseUrl}/v1/audio/transcriptions", [
+                    'model' => $model,
+                    'language' => 'id',
+                ]);
+            }
 
             if (! $response->successful()) {
                 $detail = $response->json('detail') ?? $response->body() ?? 'Server Whisper merespons error.';
@@ -103,6 +128,7 @@ class TranscribeAudioController extends Controller
                 'source_type' => $sourceType,
                 'text' => $transcriptText,
                 'language' => 'id',
+                'transcription_provider' => $provider,
                 'segments' => $data['segments'] ?? [],
                 'transcription_duration_seconds' => (int) round(microtime(true) - $transcriptionStartedAt),
             ]);

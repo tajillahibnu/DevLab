@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\TranscribeAudioController;
+use App\Http\Controllers\TranscriptionSettingsController;
 use App\Models\Transcript;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -20,9 +21,15 @@ Route::get('/', function (Request $request) {
         $activeTranscript = $transcripts->first();
     }
 
-    return view('welcome', compact('transcripts', 'activeTranscript'));
+    return view('welcome', compact('transcripts', 'activeTranscript') + [
+        'whisperProviders' => TranscriptionSettingsController::providers(),
+        'selectedWhisper' => TranscriptionSettingsController::selection()['provider'],
+    ]);
 })->name('home');
 
+Route::get('/settings/transcription', [TranscriptionSettingsController::class, 'show'])->name('settings.transcription');
+Route::post('/settings/transcription/download-model', [TranscriptionSettingsController::class, 'downloadModel'])->name('settings.transcription.download-model');
+Route::post('/settings/transcription', [TranscriptionSettingsController::class, 'update'])->name('settings.transcription.update');
 Route::post('/transcribe', TranscribeAudioController::class)->name('transcribe');
 Route::post('/transcripts/{transcript}/report', [TranscribeAudioController::class, 'regenerateReport'])->name('transcripts.report.regenerate');
 

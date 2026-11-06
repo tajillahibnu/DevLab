@@ -14,6 +14,10 @@ return [
     |
     */
 
+    'whisper' => [
+        'scribecrate_api_key' => env('SCRIBECRATE_API_KEY'),
+    ],
+
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],

@@ -12,5 +12,37 @@ services:
       - whisper-models:/root/.cache
     restart: unless-stopped
 
+  whisper-speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    profiles: [comparison]
+    ports:
+      - "9001:8000"
+    environment:
+      LOOPBACK_HOST_URL: http://127.0.0.1:8000
+    volumes:
+      - speaches-models:/home/ubuntu/.cache/huggingface/hub
+
+  whisper-scribecrate:
+    image: hwdsl2/whisper-server:latest
+    profiles: [comparison]
+    ports:
+      - "9002:9000"
+    environment:
+      WHISPER_API_KEY: ${SCRIBECRATE_API_KEY:-}
+    volumes:
+      - scribecrate-models:/var/lib/whisper
+    restart: unless-stopped
+
+  whisper-live:
+    image: ghcr.io/collabora/whisperlive-cpu:latest
+    profiles: [comparison]
+    ports:
+      - "9003:9090"
+      - "9004:9091"
+    command: ["python", "run_server.py", "--port", "9090", "--rest_port", "9091", "--backend", "faster_whisper", "--enable_rest", "--default_model", "small"]
+    restart: unless-stopped
+
 volumes:
   whisper-models:
+  speaches-models:
+  scribecrate-models:

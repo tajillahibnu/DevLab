@@ -24,9 +24,10 @@ class TranscriptTest extends TestCase
 
     public function test_it_transcribes_uploaded_audio_and_persists_to_database(): void
     {
-        Storage::fake('public');
+        Storage::fake('local');
+        Storage::disk('local')->put('transcription-settings.json', json_encode(['provider' => 'whisperlive']));
         Http::fake([
-            '*/asr*' => Http::response([
+            'http://127.0.0.1:9000/asr*' => Http::response([
                 'text' => 'Halo ini adalah contoh suara untuk pengujian transkripsi.',
                 'segments' => [
                     ['start' => 0.0, 'end' => 2.5, 'text' => 'Halo ini adalah contoh suara.'],
@@ -39,6 +40,7 @@ class TranscriptTest extends TestCase
         $response = $this->post(route('transcribe'), [
             'audio' => $audio,
             'source_type' => 'upload',
+            'provider' => 'onerahmet',
         ]);
 
         $this->assertDatabaseCount('transcripts', 1);
@@ -47,6 +49,7 @@ class TranscriptTest extends TestCase
         $this->assertEquals('sample-interview', $transcript->title);
         $this->assertEquals('sample-interview.mp3', $transcript->audio_name);
         $this->assertEquals('upload', $transcript->source_type);
+        $this->assertSame('onerahmet', $transcript->transcription_provider);
         $this->assertEquals('Halo ini adalah contoh suara untuk pengujian transkripsi.', $transcript->text);
         $this->assertNull($transcript->formatted_report);
         $this->assertIsNumeric($transcript->transcription_duration_seconds);
@@ -59,18 +62,21 @@ class TranscriptTest extends TestCase
 
     public function test_it_accepts_whatsapp_mp4_video_upload_for_transcription(): void
     {
+        Storage::fake('local');
         Storage::fake('public');
         Http::fake([
-            '*/asr*' => Http::response(['text' => 'Audio dalam video berhasil ditranskripsikan.', 'segments' => []], 200),
+            'http://127.0.0.1:9000/asr*' => Http::response(['text' => 'Audio dalam video berhasil ditranskripsikan.', 'segments' => []], 200),
         ]);
 
         $response = $this->post(route('transcribe'), [
             'audio' => UploadedFile::fake()->createWithContent('WhatsApp Audio 2026-11-02 at 19.43.16.mp4', "\x00\x00\x00\x18ftyp3gp4\x00\x00\x00\x00isom3gp4\x00\x00\x00\x01mdat"),
             'source_type' => 'upload',
+            'provider' => 'onerahmet',
         ]);
 
         $transcript = Transcript::firstOrFail();
         $this->assertSame('Audio dalam video berhasil ditranskripsikan.', $transcript->text);
+        $this->assertSame('onerahmet', $transcript->transcription_provider);
         $this->assertSame('application/mp4', $transcript->mime_type);
         Storage::disk('public')->assertExists($transcript->audio_path);
         $response->assertRedirect(route('home', ['active' => $transcript->id]));
@@ -78,14 +84,16 @@ class TranscriptTest extends TestCase
 
     public function test_transcription_saves_without_generating_ai_report(): void
     {
+        Storage::fake('local');
         Storage::fake('public');
         Http::fake([
-            '*/asr*' => Http::response(['text' => 'Transkrip tetap tersimpan.', 'segments' => []], 200),
+            'http://127.0.0.1:9000/asr*' => Http::response(['text' => 'Transkrip tetap tersimpan.', 'segments' => []], 200),
         ]);
 
         $response = $this->post(route('transcribe'), [
             'audio' => UploadedFile::fake()->create('visit.wav', 100, 'audio/wav'),
             'source_type' => 'upload',
+            'provider' => 'onerahmet',
         ]);
 
         $transcript = Transcript::firstOrFail();
@@ -167,6 +175,96 @@ class TranscriptTest extends TestCase
         $response->assertSee($transcript->audio_url);
         $response->assertSee('Riwayat Transkripsi', false);
         $response->assertSee('1 Tersimpan');
+    }
+
+    public function test_transcription_settings_can_be_saved_and_uploaded_audio_uses_selected_provider(): void
+    {
+        Storage::fake('local');
+        Storage::fake('public');
+        $this->post(route('settings.transcription.update'), [
+            'provider' => 'speaches',
+            'model' => 'Systran/faster-whisper-small',
+        ])->assertRedirect(route('settings.transcription'));
+        Storage::disk('local')->assertExists('transcription-settings.json');
+
+        Http::fake(['http://127.0.0.1:9001/v1/audio/transcriptions' => Http::response(['text' => 'Speaches dipakai.', 'segments' => []])]);
+        $this->post(route('transcribe'), [
+            'audio' => UploadedFile::fake()->create('sample.mp3', 20, 'audio/mpeg'),
+            'source_type' => 'upload',
+            'provider' => 'speaches',
+        ]);
+
+        Http::assertSent(fn ($request) => $request->url() === 'http://127.0.0.1:9001/v1/audio/transcriptions'
+            && str_contains($request->body(), 'Systran/faster-whisper-small')
+            && str_contains($request->body(), 'sample.mp3')
+            && str_contains($request->body(), 'name="language"'));
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), ':9000/asr'));
+    }
+
+    public function test_speaches_model_can_be_downloaded_explicitly_from_settings(): void
+    {
+        Storage::fake('local');
+        Http::fake(['http://127.0.0.1:9001/v1/models/Systran/faster-whisper-small' => Http::response(['id' => 'Systran/faster-whisper-small'])]);
+
+        $this->post(route('settings.transcription.download-model'), [
+            'model' => 'Systran/faster-whisper-small',
+        ])->assertRedirect(route('settings.transcription'));
+
+        Http::assertSent(fn ($request) => $request->method() === 'POST'
+            && $request->url() === 'http://127.0.0.1:9001/v1/models/Systran/faster-whisper-small');
+    }
+
+    public function test_scribecrate_upload_uses_openai_compatible_multipart_fields(): void
+    {
+        Storage::fake('local');
+        Storage::fake('public');
+        Storage::disk('local')->put('transcription-settings.json', json_encode([
+            'provider' => 'scribecrate',
+            'model' => 'Systran/faster-whisper-small',
+        ]));
+        config(['services.whisper.scribecrate_api_key' => 'test-scribe-key']);
+        Http::fake([
+            'http://127.0.0.1:9002/v1/audio/transcriptions' => Http::response(['text' => 'ScribeCrate dipakai.', 'segments' => []]),
+        ]);
+
+        $this->post(route('transcribe'), [
+            'audio' => UploadedFile::fake()->create('sample.mp3', 20, 'audio/mpeg'),
+            'source_type' => 'upload',
+        ])->assertRedirect();
+
+        Http::assertSent(fn ($request) => $request->url() === 'http://127.0.0.1:9002/v1/audio/transcriptions'
+            && str_contains($request->body(), 'name="file"')
+            && str_contains($request->body(), 'name="model"')
+            && str_contains($request->body(), 'whisper-1')
+            && str_contains($request->body(), 'name="language"')
+            && str_contains($request->body(), 'sample.mp3')
+            && $request->hasHeader('Authorization', 'Bearer test-scribe-key'));
+    }
+
+    public function test_whisperlive_can_be_selected_for_file_transcription(): void
+    {
+        Storage::fake('local');
+        Storage::fake('public');
+        Storage::disk('local')->put('transcription-settings.json', json_encode(['provider' => 'whisperlive']));
+        Http::fake([
+            'http://127.0.0.1:9004/v1/audio/transcriptions' => Http::response(['text' => 'WhisperLive REST dipakai.', 'segments' => []]),
+        ]);
+
+        $this->post(route('transcribe'), [
+            'audio' => UploadedFile::fake()->create('live-test.mp3', 20, 'audio/mpeg'),
+            'source_type' => 'upload',
+            'provider' => 'whisperlive',
+        ])->assertRedirect();
+
+        $this->assertDatabaseHas('transcripts', [
+            'audio_name' => 'live-test.mp3',
+            'transcription_provider' => 'whisperlive',
+        ]);
+        Http::assertSent(fn ($request) => $request->url() === 'http://127.0.0.1:9004/v1/audio/transcriptions'
+            && str_contains($request->body(), 'name="file"')
+            && str_contains($request->body(), 'name="model"')
+            && str_contains($request->body(), 'whisper-1')
+            && str_contains($request->body(), 'live-test.mp3'));
     }
 
     public function test_it_can_download_transcript_as_text_file(): void
